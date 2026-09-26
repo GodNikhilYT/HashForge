@@ -294,7 +294,7 @@ HashForge is proprietary software.
 
 Copyright (c) 2026 Nikhil Choudhary. All rights reserved.
 
-See [LICENSE.txt](https://github.com/GodNikhilYT/HashForge/blob/main/LICENSE.txt) for the complete license terms.
+See [LICENSE](https://github.com/GodNikhilYT/HashForge/blob/main/LICENSE.txt) for the complete license terms.
 
 Third-party libraries remain subject to their own licenses.
 
