@@ -1,0 +1,34 @@
+HASHFORGE PROPRIETARY LICENSE
+Copyright (c) 2026 Nikhil Choudhary
+
+All rights reserved.
+
+This software, including its source code, executable files, documentation,
+design, graphics, logos, and related materials, is proprietary and
+confidential unless otherwise stated.
+
+Permission is NOT granted to:
+
+1. Copy, reproduce, or redistribute this software or any substantial portion
+   of its source code without prior written permission.
+
+2. Modify, reverse engineer, decompile, disassemble, or create derivative
+   works based on this software, except where such restrictions are prohibited
+   by applicable law.
+
+3. Sell, sublicense, rent, lease, or commercially distribute this software
+   or any modified version without prior written permission.
+
+4. Use the HashForge name, logo, branding, or other intellectual property
+   without prior written permission.
+
+You may use an officially distributed copy of HashForge for its intended
+purpose, subject to the applicable terms provided with that distribution.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW.
+
+For licensing, commercial use, redistribution, or permission requests,
+contact the copyright holder.
+
+Copyright (c) 2026 Nikhil Choudhary. All rights reserved.
