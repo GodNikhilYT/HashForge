@@ -1,5 +1,3 @@
-# HashForge
-
 <p align="center">
   <img src="logo.jpeg" alt="HashForge Logo" width="140">
 </p>
