@@ -246,10 +246,10 @@ HashForge_Setup.exe
 Keep the application version and installer version synchronized for each
 release.
 
-Example release progression:
+release progression:
 
 ```text
-1.0.0 → 1.0.1 → 1.1.0 → 2.0.0
+HashForge v1.0.0
 ```
 
 Do not publish a release with a lower version number than the currently
