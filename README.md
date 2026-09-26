@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.jpeg" alt="HashForge Logo" width="140">
+  <img width="140" alt="Image" src="https://github.com/user-attachments/assets/e3f7db16-feaa-47fd-b2fd-f3fa3850f880" />
 </p>
 
 <h1 align="center">HashForge</h1>
