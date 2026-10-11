@@ -57,6 +57,248 @@ def resource_path(relative_path):
 # ============================================================
 
 
+# ============================================================
+# REPORT FILE WRITER  (Excel .xlsx with auto-fit columns, or CSV)
+# ============================================================
+
+class ReportFile:
+
+    """
+    Collects rows like csv.writer, then saves them on exit as:
+      - .xlsx : header styling, auto-fitted column widths, frozen header,
+                filters; every text value (hashes, timestamps) is stored
+                as TEXT so Excel never shows ####### or 1.2E+71.
+      - .csv  : plain UTF-8 (with BOM) file.
+    """
+
+    def __init__(self, file_path):
+
+        self.file_path = file_path
+        self.rows = []
+
+    def writerow(self, row):
+
+        self.rows.append(list(row))
+
+    def __enter__(self):
+
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+
+        if exc_type is not None:
+            return False
+
+        if self.file_path.lower().endswith(".xlsx"):
+            self._save_xlsx()
+        else:
+            self._save_csv()
+
+        return False
+
+    def _save_csv(self):
+
+        with open(
+            self.file_path,
+            "w",
+            newline="",
+            encoding="utf-8-sig"
+        ) as csv_file:
+
+            csv.writer(csv_file).writerows(self.rows)
+
+    def _save_xlsx(self):
+
+        # Pure-Python .xlsx writer (zipfile + XML) - NO extra package needed.
+
+        import zipfile
+        from xml.sax.saxutils import escape
+
+        def col_letter(number):
+
+            letters = ""
+
+            while number:
+                number, rest = divmod(number - 1, 26)
+                letters = chr(65 + rest) + letters
+
+            return letters
+
+        def clean(text):
+
+            return re.sub(
+                r"[\x00-\x08\x0b\x0c\x0e-\x1f]",
+                "",
+                str(text)
+            )
+
+        rows = self.rows
+        column_count = max((len(r) for r in rows), default=1)
+
+        widths = [12] * column_count
+
+        for row in rows:
+
+            for index, value in enumerate(row):
+
+                length = len(str(value)) if value is not None else 0
+
+                widths[index] = min(
+                    max(widths[index], length + 3),
+                    140
+                )
+
+        cols_xml = "".join(
+            f'<col min="{i + 1}" max="{i + 1}" '
+            f'width="{w}" customWidth="1"/>'
+            for i, w in enumerate(widths)
+        )
+
+        sheet_rows = []
+
+        for r_index, row in enumerate(rows, start=1):
+
+            cells = []
+
+            for c_index, value in enumerate(row, start=1):
+
+                ref = f"{col_letter(c_index)}{r_index}"
+                style = ' s="1"' if r_index == 1 else ""
+
+                if (
+                    isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                ):
+
+                    cells.append(
+                        f'<c r="{ref}"{style}><v>{value}</v></c>'
+                    )
+
+                else:
+
+                    text = "" if value is None else clean(value)
+
+                    cells.append(
+                        f'<c r="{ref}"{style} t="inlineStr"><is>'
+                        f'<t xml:space="preserve">{escape(text)}</t>'
+                        f'</is></c>'
+                    )
+
+            sheet_rows.append(
+                f'<row r="{r_index}">{"".join(cells)}</row>'
+            )
+
+        last_ref = f"{col_letter(column_count)}{max(len(rows), 1)}"
+
+        sheet_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/'
+            'spreadsheetml/2006/main">'
+            '<sheetViews><sheetView workbookViewId="0">'
+            '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" '
+            'state="frozen"/></sheetView></sheetViews>'
+            f'<cols>{cols_xml}</cols>'
+            f'<sheetData>{"".join(sheet_rows)}</sheetData>'
+            f'<autoFilter ref="A1:{last_ref}"/>'
+            '</worksheet>'
+        )
+
+        styles_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<styleSheet xmlns="http://schemas.openxmlformats.org/'
+            'spreadsheetml/2006/main">'
+            '<fonts count="2">'
+            '<font><sz val="11"/><name val="Calibri"/></font>'
+            '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/>'
+            '<name val="Calibri"/></font>'
+            '</fonts>'
+            '<fills count="3">'
+            '<fill><patternFill patternType="none"/></fill>'
+            '<fill><patternFill patternType="gray125"/></fill>'
+            '<fill><patternFill patternType="solid">'
+            '<fgColor rgb="FF1F3A8A"/><bgColor indexed="64"/>'
+            '</patternFill></fill>'
+            '</fills>'
+            '<borders count="1"><border><left/><right/><top/>'
+            '<bottom/><diagonal/></border></borders>'
+            '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" '
+            'fillId="0" borderId="0"/></cellStyleXfs>'
+            '<cellXfs count="2">'
+            '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" '
+            'xfId="0"/>'
+            '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" '
+            'xfId="0" applyFont="1" applyFill="1" applyAlignment="1">'
+            '<alignment horizontal="center" vertical="center"/></xf>'
+            '</cellXfs>'
+            '</styleSheet>'
+        )
+
+        workbook_xml = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/'
+            'spreadsheetml/2006/main" xmlns:r="http://schemas.'
+            'openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="HashForge Report" sheetId="1" '
+            'r:id="rId1"/></sheets></workbook>'
+        )
+
+        workbook_rels = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/'
+            'package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.'
+            'openxmlformats.org/officeDocument/2006/relationships/'
+            'worksheet" Target="worksheets/sheet1.xml"/>'
+            '<Relationship Id="rId2" Type="http://schemas.'
+            'openxmlformats.org/officeDocument/2006/relationships/'
+            'styles" Target="styles.xml"/>'
+            '</Relationships>'
+        )
+
+        root_rels = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/'
+            'package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.'
+            'openxmlformats.org/officeDocument/2006/relationships/'
+            'officeDocument" Target="xl/workbook.xml"/>'
+            '</Relationships>'
+        )
+
+        content_types = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.'
+            'openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="'
+            'application/vnd.openxmlformats-officedocument.'
+            'spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" '
+            'ContentType="application/vnd.openxmlformats-'
+            'officedocument.spreadsheetml.worksheet+xml"/>'
+            '<Override PartName="/xl/styles.xml" ContentType="'
+            'application/vnd.openxmlformats-officedocument.'
+            'spreadsheetml.styles+xml"/>'
+            '</Types>'
+        )
+
+        with zipfile.ZipFile(
+            self.file_path,
+            "w",
+            zipfile.ZIP_DEFLATED
+        ) as archive:
+
+            archive.writestr("[Content_Types].xml", content_types)
+            archive.writestr("_rels/.rels", root_rels)
+            archive.writestr("xl/workbook.xml", workbook_xml)
+            archive.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+            archive.writestr("xl/styles.xml", styles_xml)
+            archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+
+
+
 class HashForgeApp(tk.Tk):
 
     def __init__(self):
@@ -223,6 +465,11 @@ class HashForgeApp(tk.Tk):
         self.hash_results = []
         self.history = []
 
+        # Folder / duplicate-aware scanning
+        self.scan_subfolders_var = None
+        self.scan_display_names = {}
+        self.skipped_files = []
+
         self.verify_file = None
 
         # ----------------------------------------------------
@@ -258,6 +505,7 @@ class HashForgeApp(tk.Tk):
             "phone": "",
             "email": "",
             "organization": "",
+            "organization_logo": "",
             "notes": ""
         }
 
@@ -781,7 +1029,7 @@ class HashForgeApp(tk.Tk):
         messagebox.showinfo(
             "About HashForge",
             "HashForge Desktop\n\n"
-            "Version 1.0.0\n"
+            "Version 2.0.1\n"
             "File Integrity System\n\n"
             "Local file hashing and integrity "
             "verification application.\n\n"
@@ -1143,7 +1391,7 @@ class HashForgeApp(tk.Tk):
 
         tk.Label(
             bottom_frame,
-            text="HashForge v1.0.0",
+            text="HashForge v2.0.1",
             bg=self.colors["sidebar"],
             fg=self.colors["secondary"],
             font=("Segoe UI", 9)
@@ -1914,7 +2162,7 @@ class HashForgeApp(tk.Tk):
 
         tk.Label(
             title_area,
-            text="Select files and generate cryptographic hashes",
+            text="Select files or a whole folder and generate cryptographic hashes",
             bg=self.colors["bg"],
             fg=self.colors["secondary"],
             font=self.fonts["subtitle"]
@@ -1994,6 +2242,44 @@ class HashForgeApp(tk.Tk):
             padx=(0, 10)
         )
 
+        if self.scan_subfolders_var is None:
+            self.scan_subfolders_var = tk.BooleanVar(value=True)
+
+        tk.Button(
+            file_header,
+            text="📁  Select Folder",
+            command=self.select_folder,
+            bg=self.colors["primary"],
+            fg="white",
+            activebackground=self.colors["primary_dark"],
+            activeforeground="white",
+            relief="flat",
+            borderwidth=0,
+            padx=18,
+            pady=8,
+            font=self.fonts["button"],
+            cursor="hand2"
+        ).pack(
+            side="right",
+            padx=(0, 10)
+        )
+
+        tk.Checkbutton(
+            file_header,
+            text="Include subfolders",
+            variable=self.scan_subfolders_var,
+            bg=self.colors["white"],
+            activebackground=self.colors["white"],
+            fg=self.colors["text"],
+            activeforeground=self.colors["text"],
+            selectcolor=self.colors["primary_light"],
+            font=("Segoe UI", 9),
+            cursor="hand2"
+        ).pack(
+            side="right",
+            padx=(0, 15)
+        )
+
         list_frame = tk.Frame(
             file_card,
             bg=self.colors["content"]
@@ -2044,7 +2330,7 @@ class HashForgeApp(tk.Tk):
 
             self.file_listbox.insert(
                 tk.END,
-                os.path.basename(file_path)
+                self.display_name(file_path)
             )
 
         # ----------------------------------------------------
@@ -2139,17 +2425,30 @@ class HashForgeApp(tk.Tk):
                 sticky="w"
             )
 
-        tk.Label(
+        compat_label = tk.Label(
             algorithm_card,
             text="⚠ MD5 and SHA-1 are included for compatibility. "
                  "SHA-256 and SHA-512 are preferred for modern integrity checking.",
             bg=self.colors["white"],
             fg=self.colors["warning"],
-            font=("Segoe UI", 8)
-        ).pack(
+            font=("Segoe UI", 8),
+            justify="left",
             anchor="w",
+            wraplength=600
+        )
+
+        compat_label.pack(
+            fill="x",
             padx=25,
             pady=(0, 18)
+        )
+
+        # Wrap the text to the card width so it is never cut off
+        algorithm_card.bind(
+            "<Configure>",
+            lambda event, lbl=compat_label: lbl.configure(
+                wraplength=max(event.width - 60, 200)
+            )
         )
 
         # ----------------------------------------------------
@@ -2211,6 +2510,32 @@ class HashForgeApp(tk.Tk):
             side="left",
             padx=20
         )
+
+        # Export buttons - appear as soon as hashes are generated
+        self.export_bar = tk.Frame(
+            action_top,
+            bg=self.colors["white"]
+        )
+
+        tk.Button(
+            self.export_bar,
+            text="📤  Export",
+            command=self.show_export,
+            bg=self.colors["primary"],
+            fg="white",
+            activebackground=self.colors["primary_dark"],
+            activeforeground="white",
+            relief="flat",
+            borderwidth=0,
+            padx=24,
+            pady=10,
+            font=self.fonts["button"],
+            cursor="hand2"
+        ).pack(
+            side="left"
+        )
+
+        self._set_export_bar(bool(self.hash_results))
 
         self.progress = ttk.Progressbar(
             action_card,
@@ -2286,7 +2611,8 @@ class HashForgeApp(tk.Tk):
         columns = (
             "file",
             "algorithm",
-            "hash"
+            "hash",
+            "status"
         )
 
         self.result_tree = ttk.Treeview(
@@ -2311,21 +2637,32 @@ class HashForgeApp(tk.Tk):
             text="Hash Value"
         )
 
+        self.result_tree.heading(
+            "status",
+            text="Status"
+        )
+
         self.result_tree.column(
             "file",
-            width=300,
+            width=280,
             anchor="w"
         )
 
         self.result_tree.column(
             "algorithm",
-            width=130,
+            width=100,
             anchor="center"
         )
 
         self.result_tree.column(
             "hash",
-            width=650,
+            width=520,
+            anchor="w"
+        )
+
+        self.result_tree.column(
+            "status",
+            width=190,
             anchor="w"
         )
 
@@ -2363,13 +2700,88 @@ class HashForgeApp(tk.Tk):
                 values=(
                     result["file_name"],
                     result["algorithm"],
-                    result["hash"]
+                    result["hash"],
+                    "✔ Successfully created"
                 )
             )
 
     # ========================================================
     # SELECT FILES
     # ========================================================
+
+    def _set_export_bar(self, visible):
+
+        bar = getattr(self, "export_bar", None)
+
+        try:
+
+            if bar is None or not bar.winfo_exists():
+                return
+
+            if visible:
+
+                bar.pack(
+                    side="right"
+                )
+
+            else:
+
+                bar.pack_forget()
+
+        except tk.TclError:
+
+            pass
+
+    def display_name(self, file_path):
+
+        return (
+            self.scan_display_names.get(file_path)
+            or os.path.basename(file_path)
+        )
+
+    def _add_scan_paths(self, paths, base_dir=None):
+
+        existing = {
+            os.path.normcase(os.path.normpath(p))
+            for p in self.selected_files
+        }
+
+        added = 0
+
+        for raw_path in paths:
+
+            file_path = os.path.normpath(raw_path)
+            key = os.path.normcase(file_path)
+
+            if key in existing:
+                continue
+
+            existing.add(key)
+
+            self.selected_files.append(file_path)
+
+            if base_dir:
+                self.scan_display_names[file_path] = (
+                    os.path.relpath(file_path, base_dir)
+                )
+
+            if hasattr(self, "file_listbox"):
+
+                self.file_listbox.insert(
+                    tk.END,
+                    self.display_name(file_path)
+                )
+
+            added += 1
+
+        if added and hasattr(self, "status_label"):
+
+            self.status_label.configure(
+                text=f"{len(self.selected_files)} file(s) selected",
+                fg=self.colors["primary"]
+            )
+
+        return added
 
     def select_files(self):
 
@@ -2380,36 +2792,82 @@ class HashForgeApp(tk.Tk):
         if not files:
             return
 
-        added = 0
+        self._add_scan_paths(files)
 
-        for file_path in files:
+    # ========================================================
+    # SELECT FOLDER
+    # ========================================================
 
-            if file_path not in self.selected_files:
+    def select_folder(self):
 
-                self.selected_files.append(
-                    file_path
-                )
+        directory = filedialog.askdirectory(
+            title="Select folder to hash"
+        )
 
-                if hasattr(
-                    self,
-                    "file_listbox"
-                ):
+        if not directory:
+            return
 
-                    self.file_listbox.insert(
-                        tk.END,
-                        os.path.basename(file_path)
-                    )
+        include_subfolders = (
+            self.scan_subfolders_var.get()
+            if self.scan_subfolders_var is not None
+            else True
+        )
 
-                added += 1
+        found = []
 
-        if added and hasattr(
-            self,
-            "status_label"
-        ):
+        try:
 
-            self.status_label.configure(
-                text=f"{len(self.selected_files)} file(s) selected",
-                fg=self.colors["primary"]
+            if include_subfolders:
+
+                for root, _dirs, names in os.walk(directory):
+
+                    for name in sorted(names):
+
+                        found.append(
+                            os.path.join(root, name)
+                        )
+
+            else:
+
+                for name in sorted(os.listdir(directory)):
+
+                    path = os.path.join(directory, name)
+
+                    if os.path.isfile(path):
+                        found.append(path)
+
+        except OSError as error:
+
+            messagebox.showerror(
+                "Folder Error",
+                f"Could not read folder:\n\n{error}"
+            )
+
+            return
+
+        if not found:
+
+            messagebox.showinfo(
+                "Empty Folder",
+                "No files were found in the selected folder."
+            )
+
+            return
+
+        base_dir = os.path.dirname(
+            os.path.normpath(directory)
+        )
+
+        added = self._add_scan_paths(
+            found,
+            base_dir
+        )
+
+        if added == 0:
+
+            messagebox.showinfo(
+                "Already Added",
+                "All files from this folder are already in the list."
             )
 
     # ========================================================
@@ -2419,6 +2877,8 @@ class HashForgeApp(tk.Tk):
     def clear_selected_files(self):
 
         self.selected_files.clear()
+        self.scan_display_names.clear()
+        self.skipped_files.clear()
 
         if hasattr(
             self,
@@ -2439,6 +2899,8 @@ class HashForgeApp(tk.Tk):
                 self.result_tree.delete(item)
 
         self.hash_results.clear()
+
+        self._set_export_bar(False)
 
         if hasattr(
             self,
@@ -2472,6 +2934,8 @@ class HashForgeApp(tk.Tk):
                 self.result_tree.delete(item)
 
         self.hash_results.clear()
+
+        self._set_export_bar(False)
 
         if hasattr(
             self,
@@ -2543,13 +3007,181 @@ class HashForgeApp(tk.Tk):
     # GENERATE HASHES
     # ========================================================
 
+    def calculate_file_hashes(
+        self,
+        file_path,
+        algorithms
+    ):
+
+        # One pass over the file for ALL selected algorithms.
+
+        hash_objects = {
+            algorithm: hashlib.new(self.algorithms[algorithm])
+            for algorithm in algorithms
+        }
+
+        chunk_size = 1024 * 1024
+        chunks_read = 0
+
+        with open(file_path, "rb") as file:
+
+            while True:
+
+                chunk = file.read(chunk_size)
+
+                if not chunk:
+                    break
+
+                for hash_object in hash_objects.values():
+                    hash_object.update(chunk)
+
+                chunks_read += 1
+
+                if chunks_read % 8 == 0:
+                    self.update_idletasks()
+
+        return {
+            algorithm: hash_object.hexdigest()
+            for algorithm, hash_object in hash_objects.items()
+        }
+
+    # ========================================================
+    # DUPLICATE POPUP
+    # ========================================================
+
+    def ask_duplicate_action(
+        self,
+        display_name,
+        original_name
+    ):
+
+        choice = {"value": "skip"}
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Duplicate File Detected")
+        dialog.configure(bg=self.colors["white"])
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        tk.Label(
+            dialog,
+            text="⚠  Duplicate File Detected",
+            bg=self.colors["white"],
+            fg=self.colors["warning"],
+            font=("Segoe UI", 13, "bold")
+        ).pack(
+            anchor="w",
+            padx=28,
+            pady=(22, 8)
+        )
+
+        tk.Label(
+            dialog,
+            text=(
+                f"File:\n{display_name}\n\n"
+                f"has exactly the same content as:\n{original_name}\n\n"
+                "Do you want to skip this file?"
+            ),
+            bg=self.colors["white"],
+            fg=self.colors["text"],
+            font=("Segoe UI", 10),
+            justify="left",
+            wraplength=520
+        ).pack(
+            anchor="w",
+            padx=28,
+            pady=(0, 18)
+        )
+
+        def choose(value):
+            choice["value"] = value
+            dialog.destroy()
+
+        buttons = tk.Frame(dialog, bg=self.colors["white"])
+        buttons.pack(
+            fill="x",
+            padx=28,
+            pady=(0, 22)
+        )
+
+        tk.Button(
+            buttons,
+            text="Skip",
+            command=lambda: choose("skip"),
+            bg=self.colors["primary"],
+            fg="white",
+            activebackground=self.colors["primary_dark"],
+            activeforeground="white",
+            relief="flat",
+            padx=22,
+            pady=8,
+            font=self.fonts["button"],
+            cursor="hand2"
+        ).pack(side="left")
+
+        tk.Button(
+            buttons,
+            text="Skip All Duplicates",
+            command=lambda: choose("skip_all"),
+            bg=self.colors["primary_light"],
+            fg=self.colors["primary"],
+            activebackground=self.colors["hover"],
+            relief="flat",
+            padx=22,
+            pady=8,
+            font=self.fonts["button"],
+            cursor="hand2"
+        ).pack(side="left", padx=10)
+
+        tk.Button(
+            buttons,
+            text="Include Anyway",
+            command=lambda: choose("include"),
+            bg=self.colors["white"],
+            fg=self.colors["secondary"],
+            relief="solid",
+            bd=1,
+            padx=22,
+            pady=8,
+            font=self.fonts["button"],
+            cursor="hand2"
+        ).pack(side="left")
+
+        dialog.protocol(
+            "WM_DELETE_WINDOW",
+            lambda: choose("skip")
+        )
+
+        dialog.update_idletasks()
+
+        x = (
+            self.winfo_rootx()
+            + (self.winfo_width() - dialog.winfo_width()) // 2
+        )
+        y = (
+            self.winfo_rooty()
+            + (self.winfo_height() - dialog.winfo_height()) // 2
+        )
+
+        dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+        self.wait_window(dialog)
+
+        return choice["value"]
+
+    # ========================================================
+    # GENERATE HASHES
+    # ========================================================
+
     def generate_hashes(self):
 
         if not self.selected_files:
 
             messagebox.showwarning(
                 "No Files Selected",
-                "Please select at least one file before generating hashes."
+                "Please select at least one file or folder "
+                "before generating hashes."
             )
 
             return
@@ -2567,10 +3199,7 @@ class HashForgeApp(tk.Tk):
 
             return
 
-        if not hasattr(
-            self,
-            "result_tree"
-        ):
+        if not hasattr(self, "result_tree"):
 
             self.show_scan()
 
@@ -2578,14 +3207,20 @@ class HashForgeApp(tk.Tk):
             self.result_tree.delete(item)
 
         self.hash_results.clear()
+        self.skipped_files.clear()
 
-        total_operations = (
-            len(self.selected_files)
-            * len(selected_algorithms)
-        )
+        self._set_export_bar(False)
 
-        completed = 0
-        errors = 0
+        files = list(self.selected_files)
+
+        total_files = len(files)
+
+        created = 0
+        skipped = 0
+        errors = []
+
+        seen_content = {}
+        skip_all = False
 
         self.generate_button.configure(
             state="disabled",
@@ -2593,154 +3228,235 @@ class HashForgeApp(tk.Tk):
         )
 
         self.progress["value"] = 0
-        self.progress["maximum"] = total_operations
+        self.progress["maximum"] = total_files
 
         self.update_idletasks()
 
-        for file_path in self.selected_files:
+        for index, file_path in enumerate(files, start=1):
 
-            file_name = os.path.basename(
-                file_path
+            name = self.display_name(file_path)
+
+            self.status_label.configure(
+                text=f"Hashing {index}/{total_files} • {name}",
+                fg=self.colors["primary"]
             )
 
-            for algorithm in selected_algorithms:
+            self.update_idletasks()
 
-                try:
+            # ------------------------------------------------
+            # HASH (one read pass, all algorithms)
+            # ------------------------------------------------
 
-                    self.status_label.configure(
-                        text=(
-                            f"Hashing {file_name} • "
-                            f"{algorithm}"
-                        ),
-                        fg=self.colors["primary"]
+            try:
+
+                digests = self.calculate_file_hashes(
+                    file_path,
+                    selected_algorithms
+                )
+
+            except Exception as error:
+
+                errors.append((name, str(error)))
+                self.stats["errors"] += 1
+
+                self.result_tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        name,
+                        "—",
+                        str(error),
+                        "✖ Error"
+                    )
+                )
+
+                self.progress["value"] = index
+                self.update_idletasks()
+
+                continue
+
+            # ------------------------------------------------
+            # DUPLICATE CHECK (identical content)
+            # ------------------------------------------------
+
+            content_key = tuple(
+                digests[algorithm]
+                for algorithm in selected_algorithms
+            )
+
+            if content_key in seen_content:
+
+                original_path = seen_content[content_key]
+
+                if skip_all:
+                    action = "skip"
+                else:
+                    action = self.ask_duplicate_action(
+                        name,
+                        self.display_name(original_path)
                     )
 
-                    self.update_idletasks()
+                if action == "skip_all":
+                    skip_all = True
+                    action = "skip"
 
-                    digest = self.calculate_file_hash(
-                        file_path,
-                        algorithm
-                    )
+                if action == "skip":
 
-                    result = {
+                    skipped += 1
+
+                    self.skipped_files.append({
                         "file": file_path,
-                        "file_name": file_name,
-                        "algorithm": algorithm,
-                        "hash": digest,
-                        "timestamp": datetime.now().strftime(
-                            "%Y-%m-%d %H:%M:%S"
-                        )
-                    }
-
-                    self.hash_results.append(
-                        result
-                    )
-
-                    history_entry = dict(result)
-                    history_entry["type"] = "scan"
-
-                    self.history.insert(
-                        0,
-                        history_entry
-                    )
+                        "duplicate_of": original_path
+                    })
 
                     self.result_tree.insert(
                         "",
                         tk.END,
                         values=(
-                            file_name,
-                            algorithm,
-                            digest
+                            name,
+                            "—",
+                            "Duplicate of "
+                            + self.display_name(original_path),
+                            "⏭ Skipped (duplicate)"
                         )
                     )
 
-                except (
-                    OSError,
-                    PermissionError
-                ) as error:
+                    self.progress["value"] = index
+                    self.update_idletasks()
 
-                    errors += 1
-                    self.stats["errors"] += 1
+                    continue
 
-                    messagebox.showerror(
-                        "File Error",
-                        f"Could not read:\n\n"
-                        f"{file_path}\n\n"
-                        f"Reason:\n{error}"
+            else:
+
+                seen_content[content_key] = file_path
+
+            # ------------------------------------------------
+            # SAVE RESULTS
+            # ------------------------------------------------
+
+            timestamp = datetime.now().strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+
+            last_item = None
+
+            for algorithm in selected_algorithms:
+
+                result = {
+                    "file": file_path,
+                    "file_name": name,
+                    "algorithm": algorithm,
+                    "hash": digests[algorithm],
+                    "timestamp": timestamp
+                }
+
+                self.hash_results.append(result)
+
+                history_entry = dict(result)
+                history_entry["type"] = "scan"
+
+                self.history.insert(0, history_entry)
+
+                last_item = self.result_tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        name,
+                        algorithm,
+                        digests[algorithm],
+                        "✔ Successfully created"
                     )
+                )
 
-                except Exception as error:
+            created += 1
 
-                    errors += 1
-                    self.stats["errors"] += 1
+            if last_item:
+                self.result_tree.see(last_item)
 
-                    messagebox.showerror(
-                        "Hashing Error",
-                        f"An unexpected error occurred:\n\n"
-                        f"{error}"
-                    )
+            self.status_label.configure(
+                text=f"✔ Successfully created • {name}",
+                fg=self.colors["success"]
+            )
 
-                completed += 1
+            self.progress["value"] = index
 
-                self.progress["value"] = completed
+            self.update_idletasks()
 
-                self.update_idletasks()
+        # ----------------------------------------------------
+        # FINISH
+        # ----------------------------------------------------
 
-        self.stats["files"] = len(
-            self.selected_files
-        )
+        self.stats["files"] = created
 
         self.stats["last_scan"] = (
-            datetime.now().strftime(
-                "%H:%M:%S"
-            )
+            datetime.now().strftime("%H:%M:%S")
         )
 
         scan_text = (
-            f"{len(self.selected_files)} file(s) • "
+            f"{created} file(s) • "
             f"{len(selected_algorithms)} algorithm(s) • "
             f"{datetime.now().strftime('%H:%M:%S')}"
         )
 
-        self.recent_scans.insert(
-            0,
-            scan_text
-        )
+        self.recent_scans.insert(0, scan_text)
 
-        self.recent_scans = (
-            self.recent_scans[:5]
-        )
+        self.recent_scans = self.recent_scans[:5]
 
         self.generate_button.configure(
             state="normal",
             text="⚡  Generate Hashes"
         )
 
-        if errors == 0:
+        self._set_export_bar(bool(self.hash_results))
+
+        self.update_idletasks()
+
+        summary = (
+            f"Successfully created hashes for "
+            f"{created} file(s)."
+        )
+
+        if skipped:
+            summary += f"\nSkipped duplicates: {skipped}"
+
+        if errors:
+            summary += f"\nErrors: {len(errors)}"
+
+        if errors:
 
             self.status_label.configure(
                 text=(
-                    f"Completed • "
-                    f"{len(self.hash_results)} "
-                    f"hash(es) generated"
+                    f"Completed • {created} created • "
+                    f"{len(errors)} error(s)"
                 ),
-                fg=self.colors["success"]
+                fg=self.colors["warning"]
             )
 
-            messagebox.showinfo(
-                "Hash Generation Complete",
-                f"Successfully generated "
-                f"{len(self.hash_results)} hash(es)."
+            details = "\n".join(
+                f"• {n}: {e}" for n, e in errors[:10]
+            )
+
+            if len(errors) > 10:
+                details += f"\n... and {len(errors) - 10} more"
+
+            messagebox.showwarning(
+                "Hash Generation Completed With Errors",
+                summary + "\n\nCould not read:\n" + details
             )
 
         else:
 
             self.status_label.configure(
                 text=(
-                    f"Completed with "
-                    f"{errors} error(s)"
+                    f"✔ Successfully created • {created} file(s)"
+                    + (f" • {skipped} skipped" if skipped else "")
                 ),
-                fg=self.colors["warning"]
+                fg=self.colors["success"]
+            )
+
+            messagebox.showinfo(
+                "Successfully Created",
+                summary
             )
 
     # ========================================================
@@ -3124,6 +3840,13 @@ class HashForgeApp(tk.Tk):
             )
         )
 
+        logo_path_var = tk.StringVar(
+            value=self.case_information.get(
+                "organization_logo",
+                ""
+            )
+        )
+
         # ====================================================
         # FIELD HELPER
         # ====================================================
@@ -3391,19 +4114,242 @@ class HashForgeApp(tk.Tk):
             examiner_name_var
         )
 
-        create_field(
+        # ----------------------------------------------------
+        # PHONE  (digits only - no + , spaces or letters)
+        # ----------------------------------------------------
+
+        phone_entry = create_field(
             "Phone:",
             phone_var
         )
 
-        create_field(
+        phone_hint = tk.Label(
+            form,
+            text="Only numbers (0-9) are allowed - no +, spaces or letters.",
+            bg=self.colors["white"],
+            fg=self.colors["danger"],
+            font=("Segoe UI", 8)
+        )
+
+        def filter_phone(*_args):
+
+            current = phone_var.get()
+
+            digits = re.sub(r"\D", "", current)[:15]
+
+            if digits != current:
+
+                phone_var.set(digits)
+
+                if not phone_hint.winfo_ismapped():
+
+                    phone_hint.pack(
+                        after=phone_entry.master,
+                        anchor="w",
+                        padx=(148, 0),
+                        pady=(0, 2)
+                    )
+
+            elif phone_hint.winfo_ismapped():
+
+                phone_hint.pack_forget()
+
+        phone_var.trace_add(
+            "write",
+            filter_phone
+        )
+
+        # ----------------------------------------------------
+        # EMAIL  (Gmail format only: name@gmail.com)
+        # ----------------------------------------------------
+
+        email_entry = create_field(
             "Email:",
             email_var
         )
 
+        email_hint = tk.Label(
+            form,
+            text="Write correct Gmail, e.g. nikhil@gmail.com",
+            bg=self.colors["white"],
+            fg=self.colors["danger"],
+            font=("Segoe UI", 8)
+        )
+
+        gmail_pattern = re.compile(
+            r"[A-Za-z0-9](?:[A-Za-z0-9._+-]*[A-Za-z0-9])?@gmail\.com",
+            re.IGNORECASE
+        )
+
+        def is_valid_gmail(value):
+
+            if not value:
+                return True
+
+            return (
+                gmail_pattern.fullmatch(value) is not None
+                and ".." not in value
+            )
+
+        def check_email(_event=None):
+
+            if is_valid_gmail(email_var.get().strip()):
+
+                if email_hint.winfo_ismapped():
+                    email_hint.pack_forget()
+
+                return True
+
+            if not email_hint.winfo_ismapped():
+
+                email_hint.pack(
+                    after=email_entry.master,
+                    anchor="w",
+                    padx=(148, 0),
+                    pady=(0, 2)
+                )
+
+            return False
+
+        email_entry.bind(
+            "<FocusOut>",
+            check_email
+        )
+
+        email_entry.bind(
+            "<KeyRelease>",
+            lambda _e: (
+                check_email()
+                if email_hint.winfo_ismapped()
+                else None
+            )
+        )
+
+
         create_field(
             "Organization:",
             organization_var
+        )
+
+        # Optional organization logo (shown on the PDF report)
+
+        logo_row = tk.Frame(
+            form,
+            bg=self.colors["white"]
+        )
+
+        logo_row.pack(
+            fill="x",
+            pady=7
+        )
+
+        logo_row.grid_columnconfigure(
+            1,
+            weight=1
+        )
+
+        tk.Label(
+            logo_row,
+            text="Organization Logo:",
+            bg=self.colors["white"],
+            fg=self.colors["text"],
+            font=("Segoe UI", 9),
+            width=18,
+            anchor="w"
+        ).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=(0, 10)
+        )
+
+        logo_entry = tk.Entry(
+            logo_row,
+            textvariable=logo_path_var,
+            bg=self.colors["white"],
+            fg=self.colors["text"],
+            insertbackground=self.colors["text"],
+            relief="solid",
+            bd=1,
+            font=("Segoe UI", 9)
+        )
+
+        logo_entry.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            ipady=6
+        )
+
+        def browse_logo():
+
+            selected = filedialog.askopenfilename(
+                parent=dialog,
+                title="Select Organization Logo (optional)",
+                filetypes=[
+                    (
+                        "Images",
+                        "*.png *.jpg *.jpeg"
+                    ),
+                    (
+                        "All Files",
+                        "*.*"
+                    )
+                ]
+            )
+
+            if selected:
+                logo_path_var.set(selected)
+
+        tk.Button(
+            logo_row,
+            text="Browse",
+            command=browse_logo,
+            bg=self.colors["primary"],
+            fg="white",
+            activebackground=self.colors["primary_dark"],
+            activeforeground="white",
+            relief="flat",
+            padx=14,
+            pady=5,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2"
+        ).grid(
+            row=0,
+            column=2,
+            padx=(8, 0)
+        )
+
+        tk.Button(
+            logo_row,
+            text="Clear",
+            command=lambda: logo_path_var.set(""),
+            bg=self.colors["white"],
+            fg=self.colors["danger"],
+            activebackground=self.colors["white"],
+            relief="flat",
+            padx=8,
+            pady=5,
+            font=("Segoe UI", 9, "bold"),
+            cursor="hand2"
+        ).grid(
+            row=0,
+            column=3,
+            padx=(4, 0)
+        )
+
+        tk.Label(
+            form,
+            text=(
+                "Optional - PNG/JPG logo shown at the top of the PDF report."
+            ),
+            bg=self.colors["white"],
+            fg=self.colors["secondary"],
+            font=("Segoe UI", 8)
+        ).pack(
+            anchor="w",
+            padx=(0, 0),
+            pady=(0, 4)
         )
 
         # ====================================================
@@ -3511,6 +4457,36 @@ class HashForgeApp(tk.Tk):
 
                 return False
 
+            phone_value = phone_var.get().strip()
+
+            if phone_value and not (10 <= len(phone_value) <= 15):
+
+                messagebox.showwarning(
+                    "Case Information",
+                    "Phone number must contain 10 to 15 digits "
+                    "(numbers only).",
+                    parent=dialog
+                )
+
+                phone_entry.focus_set()
+
+                return False
+
+            if not is_valid_gmail(email_var.get().strip()):
+
+                check_email()
+
+                messagebox.showwarning(
+                    "Case Information",
+                    "Write correct Gmail.\n\n"
+                    "Example: nikhil@gmail.com",
+                    parent=dialog
+                )
+
+                email_entry.focus_set()
+
+                return False
+
             self.case_information = {
                 "case_name": case_name,
                 "base_directory":
@@ -3524,9 +4500,11 @@ class HashForgeApp(tk.Tk):
                 "phone":
                     phone_var.get().strip(),
                 "email":
-                    email_var.get().strip(),
+                    email_var.get().strip().lower(),
                 "organization":
                     organization_var.get().strip(),
+                "organization_logo":
+                    logo_path_var.get().strip(),
                 "notes":
                     notes_text.get(
                         "1.0",
@@ -4051,6 +5029,23 @@ class HashForgeApp(tk.Tk):
         )
 
         story = []
+
+        # ----------------------------------------------------
+        # ORGANIZATION LOGO (optional)
+        # ----------------------------------------------------
+
+        logo_flowable = self.build_pdf_logo()
+
+        if logo_flowable is not None:
+
+            story.append(logo_flowable)
+
+            story.append(
+                Spacer(
+                    1,
+                    8
+                )
+            )
 
         # ----------------------------------------------------
         # TITLE
@@ -4850,6 +5845,49 @@ class HashForgeApp(tk.Tk):
     # PDF ESCAPE
     # ========================================================
 
+    def build_pdf_logo(
+        self,
+        max_width_mm=45,
+        max_height_mm=28
+    ):
+
+        logo_path = self.case_information.get(
+            "organization_logo",
+            ""
+        )
+
+        if not logo_path or not os.path.isfile(logo_path):
+            return None
+
+        try:
+
+            from reportlab.lib.utils import ImageReader
+            from reportlab.platypus import Image as RLImage
+
+            width, height = ImageReader(
+                logo_path
+            ).getSize()
+
+            scale = min(
+                (max_width_mm * mm) / width,
+                (max_height_mm * mm) / height
+            )
+
+            logo = RLImage(
+                logo_path,
+                width=width * scale,
+                height=height * scale
+            )
+
+            logo.hAlign = "CENTER"
+
+            return logo
+
+        except Exception:
+
+            # A broken/unsupported logo must never block the report.
+            return None
+
     def pdf_escape(
         self,
         value
@@ -4891,13 +5929,10 @@ class HashForgeApp(tk.Tk):
 
         file_path = filedialog.asksaveasfilename(
             title="Export Hash Results",
-            defaultextension=".csv",
-            initialfile="HashForge_Hash_Report.csv",
+            defaultextension=".xlsx",
+            initialfile="HashForge_Hash_Report.xlsx",
             filetypes=[
-                (
-                    "CSV Files",
-                    "*.csv"
-                ),
+                ("Excel Workbook (auto-fit columns)", "*.xlsx"), ("CSV Files", "*.csv"),
                 (
                     "All Files",
                     "*.*"
@@ -4910,16 +5945,7 @@ class HashForgeApp(tk.Tk):
 
         try:
 
-            with open(
-                file_path,
-                "w",
-                newline="",
-                encoding="utf-8-sig"
-            ) as csv_file:
-
-                writer = csv.writer(
-                    csv_file
-                )
+            with ReportFile(file_path) as writer:
 
                 writer.writerow([
                     "Case Name",
@@ -4980,7 +6006,7 @@ class HashForgeApp(tk.Tk):
 
             self.recent_exports.insert(
                 0,
-                f"CSV • {os.path.basename(file_path)} • {timestamp}"
+                f"{'Excel' if file_path.lower().endswith('.xlsx') else 'CSV'} • {os.path.basename(file_path)} • {timestamp}"
             )
 
             self.recent_exports = (
@@ -4988,16 +6014,16 @@ class HashForgeApp(tk.Tk):
             )
 
             messagebox.showinfo(
-                "CSV Export Complete",
-                "CSV report saved successfully.\n\n"
+                "Export Complete",
+                "Report saved successfully.\n\n"
                 f"{file_path}"
             )
 
         except Exception as error:
 
             messagebox.showerror(
-                "CSV Export Error",
-                f"Could not export CSV.\n\n{error}"
+                "Export Error",
+                f"Could not export report.\n\n{error}"
             )
 
     # ========================================================
@@ -6753,13 +7779,10 @@ class HashForgeApp(tk.Tk):
 
         file_path = filedialog.asksaveasfilename(
             title="Export History",
-            defaultextension=".csv",
-            initialfile="HashForge_History.csv",
+            defaultextension=".xlsx",
+            initialfile="HashForge_History.xlsx",
             filetypes=[
-                (
-                    "CSV Files",
-                    "*.csv"
-                ),
+                ("Excel Workbook (auto-fit columns)", "*.xlsx"), ("CSV Files", "*.csv"),
                 (
                     "All Files",
                     "*.*"
@@ -6772,16 +7795,7 @@ class HashForgeApp(tk.Tk):
 
         try:
 
-            with open(
-                file_path,
-                "w",
-                newline="",
-                encoding="utf-8-sig"
-            ) as csv_file:
-
-                writer = csv.writer(
-                    csv_file
-                )
+            with ReportFile(file_path) as writer:
 
                 writer.writerow([
                     "Timestamp",
@@ -7696,13 +8710,10 @@ class HashForgeApp(tk.Tk):
 
         file_path = filedialog.asksaveasfilename(
             title="Export Duplicates",
-            defaultextension=".csv",
-            initialfile="HashForge_Duplicates.csv",
+            defaultextension=".xlsx",
+            initialfile="HashForge_Duplicates.xlsx",
             filetypes=[
-                (
-                    "CSV Files",
-                    "*.csv"
-                ),
+                ("Excel Workbook (auto-fit columns)", "*.xlsx"), ("CSV Files", "*.csv"),
                 (
                     "All Files",
                     "*.*"
@@ -7715,16 +8726,7 @@ class HashForgeApp(tk.Tk):
 
         try:
 
-            with open(
-                file_path,
-                "w",
-                newline="",
-                encoding="utf-8-sig"
-            ) as csv_file:
-
-                writer = csv.writer(
-                    csv_file
-                )
+            with ReportFile(file_path) as writer:
 
                 writer.writerow([
                     "Group",

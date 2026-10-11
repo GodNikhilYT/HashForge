@@ -1,52 +1,39 @@
 #define MyAppName "HashForge"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "2.0.1"
 #define MyAppPublisher "HashForge"
 #define MyAppExeName "HashForge.exe"
 
 [Setup]
-AppId={{B7E9F4A1-6D8C-4F2B-91E5-HASHFORGE2026}}
+AppId={{A8E4F9D2-7B31-4C65-9A12-5F8D3E6B1024}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-
 DefaultDirName={autopf}\HashForge
 DefaultGroupName=HashForge
-
-OutputDir=D:\EX-Project\Hash Forge Pro\installer
-OutputBaseFilename=HashForge_Setup
-
+DisableProgramGroupPage=yes
+OutputDir=D:\version 2.0.1\installer
+OutputBaseFilename=HashForge_Setup_v2.0.1
+SetupIconFile=D:\version 2.0.1\logo.ico
+UninstallDisplayIcon={app}\HashForge.exe
 Compression=lzma
 SolidCompression=yes
-
-SetupIconFile=D:\EX-Project\Hash Forge Pro\logo.ico
-
-UninstallDisplayIcon={app}\HashForge.exe
-
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
-
-PrivilegesRequired=admin
-
-DisableProgramGroupPage=yes
-
 WizardStyle=modern
+PrivilegesRequired=admin
+ArchitecturesInstallIn64BitMode=x64
+Uninstallable=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-[Files]
-Source: "D:\EX-Project\Hash Forge Pro\dist\HashForge.exe"; DestDir: "{app}"; Flags: ignoreversion
-
-[Icons]
-Name: "{autodesktop}\HashForge"; Filename: "{app}\HashForge.exe"; WorkingDir: "{app}"
-Name: "{group}\HashForge"; Filename: "{app}\HashForge.exe"; WorkingDir: "{app}"
-
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: unchecked
+
+[Files]
+Source: "D:\version 2.0.1\dist\HashForge.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{autodesktop}\HashForge"; Filename: "{app}\HashForge.exe"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{group}\HashForge"; Filename: "{app}\HashForge.exe"; WorkingDir: "{app}"
+Name: "{autoprograms}\HashForge"; Filename: "{app}\HashForge.exe"
+Name: "{autodesktop}\HashForge"; Filename: "{app}\HashForge.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\HashForge.exe"; Description: "Launch HashForge"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\HashForge.exe"; Description: "Launch HashForge"; Flags: postinstall nowait skipifsilent
